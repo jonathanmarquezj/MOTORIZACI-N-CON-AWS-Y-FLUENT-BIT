@@ -1,0 +1,174 @@
+version: '3.8'
+
+services:
+# -----------------------------------------
+#               MONITORIZADOR
+# -----------------------------------------
+# FLUENT
+  fluent:
+    container_name: fluent-bit
+    image: grafana/fluent-bit-plugin-loki:latest
+    environment:
+      LOKI_URL: http://loki:3100/loki/api/v1/push
+    volumes:
+      - ./conf/fluent/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf
+    restart: always
+#    hostname: fluent
+    networks:
+      - red-entorno
+    ports:
+      - 24224:24224
+      - 24224:24224/udp
+    networks:
+      - red-entorno
+
+# GRAFANA
+  grafana:
+    image: grafana/grafana:7.2.2
+    container_name: grafana
+    volumes:
+      - ./conf/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: root # Usuario de la web
+      GF_SECURITY_ADMIN_PASSWORD: root # Pass de la web
+    networks:
+      - red-entorno
+
+# LOKI
+  loki:
+    container_name: loki
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    networks:
+      - red-entorno
+
+
+
+# -----------------------------------------
+#                SERVICIOS
+# -----------------------------------------
+
+# DRUPAL Y PHP
+  php:
+    container_name: drupal
+    volumes:
+    - type: volume
+      source: staticfiles
+      target: /opt/drupal/web
+    image: jonathan-drupal
+    restart: always
+    hostname: drupal
+    depends_on:
+      - "fluent"
+    networks:
+      - red-entorno
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: drupal.logs
+
+# SERVIDOR WEB
+  nginx:
+#    container_name: nginx # Lo quitamos para hacer el scale del contenedor
+    deploy:
+      replicas: 2 # Escalamos el servicio
+      update_config:
+        parallelism: 1
+        delay: 1m30s
+    depends_on:
+      - "php"
+      - "fluent"
+    volumes:
+    - type: volume
+      source: staticfiles
+      target: /var/www/html
+    environment:
+      NGINX_BACKEND_PORT: ${NGINX_BACKEND_PORT}
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME}
+      NGINX_BACKEND_HOST: ${NGINX_BACKEND_HOST}
+    image: jonathan-nginx
+    restart: always
+    networks:
+      - red-entorno
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: nginx.logs
+#    ports:
+#     - 80:80
+#     - 443:443
+
+# BASE DE DATOS
+  db:
+    container_name: mysql
+    volumes:
+    - type: volume
+      source: drupaldatabase
+      target: /var/lib/mysql
+    image: mariadb
+    restart: always
+    depends_on:
+      - "fluent"
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    networks:
+      - red-entorno
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: mysql.logs
+
+  # BALANCEADOR DE CARGA
+  haproxy:
+    container_name: haproxy
+    image: haproxy:1.7
+    volumes:
+    - type: volume
+      source: confhaproxy
+      target: /usr/local/etc/haproxy
+    depends_on:
+      - nginx
+    ports:
+      - "80:80"
+      - "8181:8181"
+    networks:
+      - red-entorno
+      
+
+# -----------------------------------------
+#                 VOLUMENES
+# -----------------------------------------
+volumes:
+  staticfiles:
+    driver: local
+    driver_opts:
+      type: none
+      device: ./volumen/files
+      o: bind
+  drupaldatabase:
+    driver: local
+    driver_opts:
+      type: none
+      device: ./volumen/mysql
+      o: bind
+  confhaproxy:
+    driver: local
+    driver_opts:
+      type: none
+      device: ./volumen/haproxy
+      o: bind
+    
+# -----------------------------------------
+#                   RED
+# -----------------------------------------
+networks:
+  red-entorno:
