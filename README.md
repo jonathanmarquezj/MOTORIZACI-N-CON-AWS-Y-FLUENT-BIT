@@ -87,8 +87,9 @@ logging:
     tag: drupal.logs
 </pre>
 De tal manera que en un contenedor quedaría:
-php:
+
 <pre>
+php:
   container_name: drupal
   volumes:
     - type: volume
